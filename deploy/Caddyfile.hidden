@@ -17,8 +17,28 @@ www.__DOMAIN__ {
 __DOMAIN__ {
     encode gzip zstd
 
-    # The hub — strip the secret prefix, then proxy. The app knows its external
-    # prefix (LIFE_OS_HUB_PREFIX / root_path) so its own links stay correct.
+    # The React hub (life-os-web) — a STATIC bundle at <prefix>/app/*, no Node
+    # runtime on this box. MUST precede the catch-all hub proxy below: these are
+    # mutually exclusive handlers and the more specific subtree has to win, or
+    # every asset request would be proxied to FastAPI and 404.
+    #
+    # try_files → index.html is safe HERE (unlike at the domain root) because it
+    # is scoped to the <prefix>/app/ subtree, which FastAPI does not own — so it
+    # cannot shadow /api, /login, /health or any Jinja page.
+    #
+    # The bundle itself is served unauthenticated; that is the normal SPA shape
+    # and leaks nothing, because every byte of DATA it renders comes from
+    # /api/* behind the session gate (a logged-out visitor gets a shell that
+    # immediately 401s to the login page). Source maps are deliberately not
+    # deployed — see deploy/bin/deploy-web.sh.
+    handle_path __HUB_PREFIX__/app/* {
+        root * /home/life/web
+        try_files {path} /index.html
+        file_server
+    }
+
+    # The Jinja hub — strip the secret prefix, then proxy. The app knows its
+    # external prefix (LIFE_OS_HUB_PREFIX) so its own links stay correct.
     handle_path __HUB_PREFIX__/* {
         reverse_proxy localhost:8000
     }
