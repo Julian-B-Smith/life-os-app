@@ -16,3 +16,6 @@ LIBRARY by default.
 - **[L0003]** Rate-limit on X-Forwarded-For behind the proxy (client.host is the
   proxy); test with opaque keys, not IP literals, so the public repo's ip_gate stays
   meaningful — tags: `security`, `test-harness`, `deploy-ops`
+- **[L0004]** Commit messages go through a heredoc to `git commit -F -`, never a
+  double-quoted `-m` (backticks in prose get command-substituted away)
+  — tags: `tooling`, `deploy-ops`

@@ -84,3 +84,26 @@ Template:
   client (e.g. proxy protocol enabled), keying on XFF becomes unnecessary; if
   the ip_gate is changed to exempt RFC 5737 ranges, the second half is moot.
 - **supersedes:** —
+
+### [L0004] Never pass a prose commit message as a double-quoted shell argument
+- **tier:** canonical
+- **added:** 2026-08-26
+- **tags:** tooling, deploy-ops
+- **lesson:** Writing `git commit -m "…"` with prose that contains backticks
+  runs the backticked text as a COMMAND SUBSTITUTION and silently deletes it
+  from the message. Technical commit messages quote identifiers constantly, so
+  this fires often and is invisible unless you re-read the committed message.
+  A dollar-sign or `!` in the text is the same class of hazard. Use a heredoc
+  into `git commit -F -` instead, which passes the text through untouched:
+  `git commit -F - <<'MSG' … MSG` (quote the delimiter to stop expansion too).
+  Once pushed to a branch that auto-deploys, the mangling is NOT worth fixing:
+  amending rewrites history the deploy box pulls, which risks blocking deploys
+  over a cosmetic loss. So the discipline has to be preventive, not corrective.
+- **evidence:** 2026-08-15, commit e3a88fd — a backticked word was eaten from a
+  BR-1 message ("the payload carries  plus an umbrella KEY"), with the shell
+  reporting `command not found: umbrellas`. Repeated 2026-08-26 in 01827ce
+  despite knowing the failure: "route ( → , a real 200)" lost both identifiers
+  (`permission denied: ..`). Two occurrences, same session, same cause.
+- **falsifier:** If a double-quoted `-m` message containing backticks ever
+  survives verbatim in `git log`, this lesson is wrong.
+- **supersedes:** —
