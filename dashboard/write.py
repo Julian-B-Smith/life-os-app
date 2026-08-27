@@ -12,11 +12,27 @@ schema, derived state, skills, or dev/ — there is simply no endpoint for it.
 
 If ``LIFE_OS_WRITE_TOKEN`` is unset the whole write API is disabled (503) — a
 write surface must never be open, unlike the read grace mode.
+
+TWO SURFACES, ONE IMPLEMENTATION (SW-0, 2026-08-26)
+---------------------------------------------------
+The same four primitives are exposed twice, for two callers that authenticate
+differently and cannot share a credential:
+
+* ``/api/write/*`` — **Bearer only**. Programmatic clients (the MCP, watchers,
+  scripts). A browser must never use this: it would mean a write token in
+  client-side JS.
+* ``/api/sw/*``    — **session cookie + CSRF guard**. The browser hub, so the
+  UI can record without ever holding a token.
+
+Both call the SAME `_do_*` primitives below, so the two surfaces cannot drift in
+what they permit — the hard scope exclusions above hold identically for both.
+Both pass through the same rate limiter.
 """
 import hmac
 import os
 from datetime import date
 from typing import Optional
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -33,6 +49,11 @@ _OUTCOMES = ("done", "partial", "missed", "rescheduled")
 
 def _write_token() -> str:
     return os.getenv("LIFE_OS_WRITE_TOKEN", "").strip()
+
+
+def _dashboard_token() -> str:
+    """The READ/session secret — gates the session-write surface's login."""
+    return os.getenv("LIFE_OS_DASHBOARD_TOKEN", "").strip()
 
 
 def require_write_token(request: Request,
@@ -88,8 +109,11 @@ class InboxBody(BaseModel):
     due: Optional[str] = None   # e.g. "hard 2026-07-15"
 
 
-@router.post("/log", dependencies=[Depends(require_write_token)])
-def w_log(b: LogBody) -> dict:
+# --- the primitives: validated, bounded, surface-agnostic -------------------
+# Each takes a validated body and performs ONE append. Both routers call these,
+# so a permission or validation change lands on both surfaces at once.
+
+def _do_log(b: "LogBody") -> dict:
     _require_domain(b.domain)
     if b.outcome not in _OUTCOMES:
         raise HTTPException(status_code=422, detail=f"outcome must be one of {_OUTCOMES}")
@@ -105,8 +129,7 @@ def w_log(b: LogBody) -> dict:
     return {"ok": True, "written": "daily/logs", "entry": entry}
 
 
-@router.post("/note", dependencies=[Depends(require_write_token)])
-def w_note(b: NoteBody) -> dict:
+def _do_note(b: "NoteBody") -> dict:
     _require_domain(b.domain)
     if not b.text.strip():
         raise HTTPException(status_code=422, detail="empty note text")
@@ -114,8 +137,7 @@ def w_note(b: NoteBody) -> dict:
     return {"ok": True, "written": rel}
 
 
-@router.post("/review", dependencies=[Depends(require_write_token)])
-def w_review(b: ReviewBody) -> dict:
+def _do_review(b: "ReviewBody") -> dict:
     if b.kind not in ("daily", "weekly"):
         raise HTTPException(status_code=422, detail="kind must be 'daily' or 'weekly'")
     if not b.text.strip():
@@ -124,8 +146,7 @@ def w_review(b: ReviewBody) -> dict:
     return {"ok": True, "written": path.name, "kind": b.kind}
 
 
-@router.post("/inbox", dependencies=[Depends(require_write_token)])
-def w_inbox(b: InboxBody) -> dict:
+def _do_inbox(b: "InboxBody") -> dict:
     text = b.text.strip()
     if not text:
         raise HTTPException(status_code=422, detail="empty inbox text")
@@ -133,3 +154,99 @@ def w_inbox(b: InboxBody) -> dict:
         text = f"{text} | due: {b.due.strip()}"
     append_inbox(text)
     return {"ok": True, "written": "inbox.md", "line": text}
+
+
+# --- surface 1: Bearer token (programmatic clients) -------------------------
+
+@router.post("/log", dependencies=[Depends(require_write_token)])
+def w_log(b: LogBody) -> dict:
+    return _do_log(b)
+
+
+@router.post("/note", dependencies=[Depends(require_write_token)])
+def w_note(b: NoteBody) -> dict:
+    return _do_note(b)
+
+
+@router.post("/review", dependencies=[Depends(require_write_token)])
+def w_review(b: ReviewBody) -> dict:
+    return _do_review(b)
+
+
+@router.post("/inbox", dependencies=[Depends(require_write_token)])
+def w_inbox(b: InboxBody) -> dict:
+    return _do_inbox(b)
+
+
+# --- surface 2: session cookie + CSRF (the browser hub) ---------------------
+
+session_router = APIRouter(prefix="/api/sw", tags=["session-write"])
+
+#: Browsers refuse to send a custom header cross-origin without a successful
+#: CORS preflight, and this app configures no CORS middleware — so requiring
+#: this header is itself a CSRF defense, not decoration.
+CSRF_HEADER = "x-life-os-request"
+
+
+def _origin_is_same(request: Request) -> bool:
+    """True when no Origin is present, or it matches the request's own Host.
+
+    A missing Origin is NOT treated as hostile: non-browser clients omit it, and
+    browsers omit it on same-origin GETs. The cross-site POST case we care about
+    always carries one.
+    """
+    origin = request.headers.get("origin")
+    if not origin:
+        return True
+    return urlsplit(origin).netloc == request.headers.get("host", "")
+
+
+def require_session_write(request: Request) -> None:
+    """Session + CSRF gate for the browser write surface.
+
+    THREE independent layers, because this is the one place a browser can
+    mutate the tree:
+      1. `SameSite=lax` on the session cookie — the browser will not attach it
+         to a cross-site POST at all (the primary defense, set in app.py);
+      2. a required custom header — unsettable cross-origin without a CORS
+         preflight, and no CORS is configured;
+      3. an Origin/Host match when Origin is present.
+    Then the same rate limiter as the Bearer surface, and the same primitives.
+
+    Note the deliberate asymmetry with `require_write_token`: there is no
+    LIFE_OS_WRITE_TOKEN check here — this surface never sees that secret. It is
+    gated by *being logged in*, which is the dashboard token's session.
+    """
+    if not _dashboard_token():
+        # Token unset = auth disabled entirely (local dev grace). Mirroring the
+        # read side keeps local development usable; on the VPS it is always set.
+        return
+    key = enforce_pre_auth(request)
+    if not request.session.get("auth"):
+        record_auth_failure(key)
+        raise HTTPException(status_code=401,
+                            detail="not logged in (session required)")
+    if request.headers.get(CSRF_HEADER) is None or not _origin_is_same(request):
+        record_auth_failure(key)
+        raise HTTPException(status_code=403, detail="CSRF check failed")
+    enforce_write(key)
+
+
+@session_router.post("/log", dependencies=[Depends(require_session_write)])
+def sw_log(b: LogBody) -> dict:
+    return _do_log(b)
+
+
+@session_router.post("/note", dependencies=[Depends(require_session_write)])
+def sw_note(b: NoteBody) -> dict:
+    return _do_note(b)
+
+
+@session_router.post("/review", dependencies=[Depends(require_session_write)])
+def sw_review(b: ReviewBody) -> dict:
+    return _do_review(b)
+
+
+@session_router.post("/inbox", dependencies=[Depends(require_session_write)])
+def sw_inbox(b: InboxBody) -> dict:
+    return _do_inbox(b)

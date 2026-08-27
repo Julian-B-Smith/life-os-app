@@ -134,7 +134,9 @@ app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 
 # Write API (append-only primitives, gated by LIFE_OS_WRITE_TOKEN) — write-mcp.md
 from dashboard.write import router as _write_router  # noqa: E402
+from dashboard.write import session_router as _sw_router  # noqa: E402
 app.include_router(_write_router)
+app.include_router(_sw_router)
 
 
 @app.exception_handler(_NotAuthenticated)
@@ -392,7 +394,8 @@ def api_index() -> dict:
         "date": date.today().isoformat(),
         "plan_mode": mode["plan_mode"],
         "haiku_phrasing": mode["haiku_phrasing"],
-        "links": ["/api/today", "/api/overview", "/api/metrics", "/health"],
+        "links": ["/api/today", "/api/overview", "/api/domains/{name}",
+                  "/api/metrics", "/health"],
     }
 
 
@@ -407,6 +410,46 @@ def api_overview() -> dict:
     not re-sort, and must not recompute any of this.
     """
     return build_overview(get_life_os_root())
+
+
+@app.get("/api/domains/{name}", dependencies=[Depends(require_token)])
+def api_domain_detail(name: str) -> dict:
+    """Everything a per-domain page needs, in one request.
+
+    Filed by six of the page specs at once (dev/plans/page-specs/): the program
+    position (fitness/music-practice), threshold config for chart bands, and
+    task detail WITH computed dependency state.
+
+    Two deliberate choices:
+      * docs are returned as **markdown text, never rendered HTML** — the client
+        controls rendering, so no unsanitized HTML crosses the boundary;
+      * tasks come from the compiled queue via `to_queue_dict()` — the same
+        serialization the scheduler writes — so `urgency`, `eligible` and
+        `blocked-reason` are the engine's computed values, not a re-derivation.
+        A page renders them; it must never recompute them.
+    """
+    root = get_life_os_root()
+    if name not in _domain_names(root):        # validates + blocks traversal
+        raise HTTPException(status_code=404, detail="unknown domain")
+    ddir = root / "domains" / name
+    try:
+        all_tasks, _lint, _gen = load_queue(root)
+    except OSError:
+        all_tasks = []
+    entries = read_log_entries(root)
+    last = last_completion_for_domain(entries, name)
+    return {
+        "domain": name,
+        "thresholds": read_thresholds(root).get(name, {}),
+        "docs": {
+            "readme": _safe_read(ddir / "README.md"),
+            "goals": _safe_read(ddir / "goals.md"),
+            "program": _safe_read(ddir / "program.md"),
+        },
+        "tasks": [t.to_queue_dict() for t in all_tasks if t.domain == name],
+        "last_completion": last.isoformat() if last else None,
+        "completions_this_week": completions_this_week(entries, name, date.today()),
+    }
 
 
 @app.get("/api/today", dependencies=[Depends(require_token)])
