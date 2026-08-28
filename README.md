@@ -1,116 +1,121 @@
 # life-os-app
 
 Automation layer for a personal life operating system. The data layer is a
-markdown/YAML file tree (the Life-OS folder); this app reads it, builds a daily
-plan, and drives a Telegram bot for real-time check-ins.
+markdown/YAML file tree (the `Life-OS` sibling repo); this app reads it, builds a
+deterministic daily plan, and exposes it through a Telegram bot, a web hub, a
+JSON API, and an MCP server.
 
 **Governing principle:** AI may interpret language. AI may **not** make
 scheduling decisions. The scheduling path is fully deterministic and testable;
-the Anthropic API is only used for language tasks (`/ai` notes, `/evening`).
+model calls are confined to language tasks (`/ai` notes, `/evening`).
 
-Currently run **locally** on Windows. VPS deployment (Ionos) is deferred.
+**Status:** live on a small Ubuntu VPS. Push to `master` → the box auto-deploys
+in about a minute, **gated by pytest** (a red suite refuses the restart and
+fires a Telegram alert). Developed on macOS; the VPS is the only deployment.
 
-## Components
+_Last verified: 2026-08-26 — `./verify fast` green, 280 tests._
 
-- `morning.py` — daily briefing: compiles the queue, runs the scheduler, writes
-  `daily/README.md`, creates the day's log, and emails the plan.
-- `bot.py` — the Telegram bot (persistent long-polling process) plus the
-  `--notify` / `--checkin` one-shot senders for block triggers.
-- `scheduler/` — the deterministic scheduling package (no AI):
-  - `compile_queue.py` — reads the 4 task sources + logs → `schedule/queue.yaml`
-    (computes urgency, eligibility, critical-path, lint).
-  - `schedule.py` — deterministic placement (fixed anchors → mandatory floors →
-    effective-priority fill → carry/surface).
-  - `day.py` — shared `daily/README.md` writer + per-day drop/boost state.
-  - `tasks_parser.py`, `logs.py`, `urgency.py`, `models.py`, `constants.py`.
-- `utils.py` — shared file helpers (thresholds, logs, inbox, ingest).
-- `tests/` — pytest suite for the scheduler (`pytest -q`).
+## Layout
+
+- `bot.py` + `bot_handlers/` — the Telegram bot (long-polling on the VPS).
+- `scheduler/` — the deterministic core, no model calls anywhere in it:
+  - `compile_queue.py` — four task sources + logs → `schedule/queue.yaml`
+    (urgency, eligibility, dependencies, lint).
+  - `schedule.py` — placement (fixed anchors → mandatory floors → priority fill
+    → carry). `day.py`, `goals.py` — the two plan modes.
+  - `restday.py` — the screen-free-day primitive (closes screen-bound slots on
+    configured weekdays via the same off-day path as `days.py`).
+  - `fileio.py` — **the safe write layer**; every data-tree write goes through
+    it (atomic + advisory lock).
+  - `tasks_parser.py`, `logs.py`, `urgency.py`, `days.py`, `mode.py`,
+    `day_template.py`, `models.py`, `constants.py`, `domains.py`.
+- `dashboard/` — the FastAPI web hub:
+  - `app.py` — server-rendered pages (Today, Domains, Logs, System, Overview),
+    the JSON read API, and `/health`.
+  - `overview_data.py` — `build_overview()`, shared by the HTML page and
+    `GET /api/overview` so the two surfaces cannot drift.
+  - `groups.py` — domain umbrella grouping (presentation overlay; the scheduler
+    stays flat).
+  - `write.py` — the append-only write primitives, exposed on two surfaces
+    (see below). `ratelimit.py` — per-client sliding windows.
+- `metrics/aggregate.py` — progress aggregation (series, streaks, adherence).
+- `mcp_server.py` — MCP server: read tools plus write tools that POST to the
+  write API. Works on MCP SDK **1.x and 2.x** (compat import; do not pin `mcp<2`).
+- `deploy/` — systemd units, `Caddyfile(.hidden)`, `bin/` scripts,
+  `install-services.sh`, `bootstrap.sh`.
+- `verify` — the QC entry point (`./verify fast`): leak gate, IP gate, tests.
+
+## The three HTTP surfaces
+
+| Surface | Auth | For |
+|---|---|---|
+| `GET /api/*` | Bearer **or** session cookie | reads; the browser hub uses the cookie so no token lives in client JS |
+| `POST /api/write/*` | **Bearer only** | programmatic writers (MCP, watchers, scripts) |
+| `POST /api/sw/*` | session cookie **+ CSRF guard** | the browser hub's writes |
+
+Both write surfaces call the same primitives, so they cannot drift in what they
+permit. Scope is enforced by **absence**: the primitives only append to
+`daily/logs/`, `daily/reviews/`, `ingest/` and `inbox.md` — there is no endpoint
+that can reach the vault, thresholds, schema, derived state, skills, or `dev/`.
+Both are rate-limited per client (failed-auth budget checked *before* the token
+compare; a separate successful-write budget). `GET /health` is unauthenticated —
+the auto-deploy poller reads its `rev`; do not change its shape.
+
+The hub is served behind a **secret path prefix** (`LIFE_OS_HUB_PREFIX`) so the
+domain root is free for a separate public site. Caddy strips the prefix before
+proxying, so the app runs as a normal root app — **do not set FastAPI
+`root_path`** (it makes `StaticFiles` expect a prefix Caddy already removed).
+A React hub (`life-os-web`) is served as a static bundle under that prefix's
+`/app` subtree; the server-rendered pages remain the fallback while surfaces
+migrate one at a time.
 
 ## Setup
 
-```powershell
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-# create .env (see below) — never committed
+```bash
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+# create .env — never committed
 ```
 
-`.env` keys:
-
-| Key | Purpose |
-|-----|---------|
-| `LIFE_OS_ROOT` | Absolute path to the Life-OS data folder |
-| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
-| `TELEGRAM_CHAT_ID` | Your chat id — the bot ignores all other chats |
-| `ANTHROPIC_API_KEY` | Language tasks only (`/ai`, `/evening`) |
-| `RESEND_API_KEY` | Email delivery of the morning briefing |
-| `EMAIL_FROM`, `EMAIL_TO` | Briefing email addresses |
+`.env` keys: `LIFE_OS_ROOT` (path to the data tree), `TELEGRAM_BOT_TOKEN`,
+`TELEGRAM_CHAT_ID`, `ANTHROPIC_API_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`,
+`EMAIL_TO`, `LIFE_OS_DASHBOARD_TOKEN` (read + session login),
+`LIFE_OS_WRITE_TOKEN` (write API; separate, higher-privilege),
+`LIFE_OS_HUB_PREFIX`.
 
 ## Running
 
-### Morning briefing
-
-```powershell
-.\venv\Scripts\python.exe morning.py
-```
-
-Recompiles `schedule/queue.yaml`, writes `daily/README.md`, creates
-`daily/logs/YYYY-MM-DD.md`, and emails the plan. Run it once each morning
-(manually or via Windows Task Scheduler).
-
-### The bot
-
-```powershell
-.\venv\Scripts\python.exe bot.py
-```
-
-Runs long-polling in the foreground until stopped (Ctrl-C). Keep it in an open
-terminal or a local process manager. It only responds to `TELEGRAM_CHAT_ID`.
-
-### Block notifications & check-ins
-
-These are one-shot sends, intended to be fired by a scheduler at block times:
-
-```powershell
-.\venv\Scripts\python.exe bot.py --notify "Deep Work 1"     # "block starting"
-.\venv\Scripts\python.exe bot.py --checkin "Deep Work 1"    # "how did it go?" buttons
+```bash
+venv/bin/python morning.py                 # compile, plan, write daily/README.md, email
+venv/bin/python bot.py                     # the bot (long-polling)
+venv/bin/uvicorn dashboard.app:app --port 8000   # the hub, locally
+venv/bin/python -m pytest -q               # tests
+./verify fast                              # tests + leak/IP gates (what CI runs)
 ```
 
 ## Bot commands
 
 | Command | What it does |
 |---------|--------------|
-| `/plan` | Recompute today, show the blocks (plus any of today's block edits), and attach check-in buttons for the in-progress task block. |
-| `/behind` | Running behind — pick a scheduled task to **drop** for today; the day reshuffles. |
-| `/add` | Pin a **carried** task into the day; the day reshuffles. |
-| `/skip` | Skip a block for today (e.g. lunch). No args → tap-to-pick keyboard; tap again to restore. One-off, resets overnight. |
-| `/move <block> <HH:MM-HH:MM>` | Retime a block for today, e.g. `/move Admin 15:00-17:00`. If the edit overlaps a neighbour the bot offers **Apply as-is / Cascade / Skip neighbour / Cancel** on an inline keyboard. |
-| `/extend [N]` | Extend the in-progress block by N minutes (default 30). Routes through the same conflict menu as `/move`. Every check-in also carries **+15 / +30 / +60** buttons for one-tap extension. |
-| `/clearday` | Clear today's block edits; back to the standing day shape. |
-| `/commands` (or `/help`) | List every command, grouped by purpose. Telegram autocomplete also lists them when you type `/`. |
-| `/log [domain] <text>` | Record a completed entry in today's log (retroactive / off-schedule). A leading domain makes it count toward that cadence. |
-| `/ai <text>` | Freeform note — Haiku tags the domain and cleans it, then saves to `ingest/`. |
-| `/note [domain] <text>` | Save an ingest note; optional leading domain tag. `/note ai ...` is an alias for `/ai`. |
-| `/edit inbox <text>` | Append a task to `inbox.md`. |
-| `/edit threshold <domain>.<field> <value>` | Update a numeric threshold (e.g. `/edit threshold novel.target 600`). |
+| `/plan` | Recompute today and show it (blocks mode: the schedule; goals mode: the ranked list). |
+| `/behind` | Drop a scheduled task for today; the day reshuffles. |
+| `/add` | Pin a carried task into the day. |
+| `/skip` | Skip a block for today; resets overnight. |
+| `/move <block> <HH:MM-HH:MM>` | Retime a block for today, with a conflict menu. |
+| `/extend [N]` | Extend the in-progress block (default 30 min). |
+| `/clearday` | Clear today's block edits. |
+| `/log [domain] <text>` | Record a completed entry in today's log. |
+| `/note [domain] <text>` · `/ai <text>` | Save an ingest note (`/ai` tags + cleans it). |
+| `/review` | Capture a messy daily/weekly review. |
+| `/edit inbox <text>` | Append to `inbox.md`. |
+| `/edit threshold <domain>.<field> <value>` | Update a numeric threshold. |
 | `/domain list` | List the known domains. |
-| `/evening <brief>` | Haiku summarizes your evening into the day's log. |
-| `/start` | Connectivity check. |
+| `/mode <goals\|blocks>` | Switch plan mode. |
+| `/evening <brief>` | Summarize the evening into the day's log. |
+| `/commands`, `/start` | Help; connectivity check. |
 
-### Notifications
-
-While the bot is running it auto-schedules a **T-5 notification** before each
-block's start and a **T-5 check-in** before each task-bearing block's end
-(`notifications.py` + an in-process APScheduler). Re-armed on every `/plan`
-reshuffle and at 00:05 daily for the new day. The legacy `--notify` / `--checkin`
-CLI handles are still present for cron when the system moves to a VPS.
-
-### Check-in buttons
-
-A check-in (from `/plan` or a `--checkin` send) offers **✅ Done**,
-**⏩ Partial**, and **🔁 Reschedule**. Tapping one writes a log entry with the
-block's `task:` id (so cadence-debt and dependencies resolve) and reshuffles the
-remainder of the day. **🔁 Reschedule** also drops the task from today.
+Check-ins offer **Done / Partial / Reschedule** and write a log entry carrying
+the block's `task:` id, so cadence-debt and dependencies resolve.
 
 ## The scheduling model (brief)
 
@@ -118,36 +123,25 @@ remainder of the day. **🔁 Reschedule** also drops the task from today.
 
 - `thresholds.yaml` — recurring per-domain tasks (Type 4).
 - `domains/<d>/tasks.md` — authored task records (Type 3).
-- `inbox.md` — quick tasks (Type 1; Type 2 if a line carries a `due:` date).
-- `daily/logs/` — completion history → urgency + dependency clearing.
+- `inbox.md` — quick tasks (Type 1; Type 2 when a line carries a `due:` date).
+- `daily/logs/` — completion history → urgency and dependency clearing.
 
-Urgency = deadline proximity + cadence-debt (frozen v1 formulas) and can promote
-a `normal` task above a `high` one. The scheduler then places at most one task
-per fixed-size block from the **day template**.
-
-The day's block skeleton is Cowork-owned, authored in
-`<LIFE_OS_ROOT>/schedule/template.yaml`. The loader (`scheduler/day_template.py`)
-is resilient for detached runs: **live** source → last-known-good **cache** (in
-this app's `cache/`, refreshed on every clean live read) → built-in
-`constants.DEFAULT_BLOCKS`. `/skip` and `/move` layer one-off, single-day edits
-on top via `schedule/today-state.yaml`; they reset at the next morning rebuild.
-
-See `SYSTEM.md → Scheduling Layer` and `DOMAIN-FORMAT.md §7` in the data tree for
-the authoring contract.
-
-## Tests
-
-```powershell
-.\venv\Scripts\python.exe -m pytest -q
-```
+Urgency = deadline proximity + cadence-debt, and can promote a `normal` task
+above a `high` one. In **blocks** mode the scheduler places at most one task per
+block from the day template; in **goals** mode (current) it emits a ranked list.
+Domain-level `days:` constrains eligible weekdays. See `SYSTEM.md` and
+`DOMAIN-FORMAT.md` in the data tree for the authoring contract.
 
 ## Notes
 
 - **Script-owned files** (the only files this app writes): `daily/README.md`,
-  `daily/logs/YYYY-MM-DD.md`, `schedule/queue.yaml`, `schedule/today-state.yaml`,
-  and bot-writable targets (`ingest/`, `inbox.md` append, `thresholds.yaml`
-  value updates). `schedule/template.yaml` is **read** by the app but authored in
-  Cowork. Everything else in the data tree belongs to authoring sessions.
-- **Secrets** live only in `.env` (git-ignored). Never commit it. `httpx` request
-  logging is raised to WARNING so the bot token stays out of logs.
-- `schedule/queue.yaml` is a derived store — edit the sources, never the queue.
+  `daily/logs/`, `daily/reviews/`, `schedule/queue.yaml`,
+  `schedule/today-state.yaml`, plus bot/API-writable targets (`ingest/`,
+  `inbox.md` appends, threshold value updates). Everything else in the data tree
+  belongs to authoring sessions (the domain-walkthrough skill).
+- **Derived state** (`schedule/queue.yaml`, `today-state.yaml`) is untracked and
+  self-heals by recompiling. Edit the sources, never the queue.
+- **Secrets** live only in `.env` (git-ignored). `httpx` request logging is
+  raised to WARNING so tokens stay out of logs.
+- **This repo is public.** No machine-absolute paths, usernames, or IP literals
+  in tracked files — `./verify` has a leak gate and an IP gate that enforce it.
