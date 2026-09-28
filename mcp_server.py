@@ -114,12 +114,30 @@ _WRITE_BASE = os.getenv(
     "LIFE_OS_WRITE_URL", "https://mindlathe.xyz/lathe/api/write").rstrip("/")
 
 
-def _write(path: str, payload: dict) -> dict:
+# Fallback token location, so registering the MCP never requires pasting the
+# secret into a JSON config (Claude Code's ~/.claude.json is not a secrets
+# store). The owner creates it from their own terminal, chmod 600. The Mac
+# watcher (clients/watch.py) reads the same file.
+_TOKEN_FILE = os.path.expanduser("~/.config/life-os/write-token")
+
+
+def _write_token() -> str:
     token = os.getenv("LIFE_OS_WRITE_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        with open(_TOKEN_FILE, encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def _write(path: str, payload: dict) -> dict:
+    token = _write_token()
     if not token:
         raise ValueError(
             "recording is disabled: set LIFE_OS_WRITE_TOKEN in this MCP's env "
-            "to enable the write tools")
+            f"(or put the token in {_TOKEN_FILE}) to enable the write tools")
     import httpx
     resp = httpx.post(f"{_WRITE_BASE}/{path}", json=payload,
                       headers={"Authorization": f"Bearer {token}"}, timeout=15)
@@ -141,8 +159,28 @@ def log_activity(domain: str, outcome: str = "done", amount: float = None,
     """Record a completed activity to today's log — e.g. music-practice, 30,
     "minutes". `amount`+`unit` populate the quantitative field that feeds the
     progress graphs. outcome ∈ done|partial|missed|rescheduled."""
+    # via=claude: the interface trial (2026-09-28) counts completions per
+    # surface, and this MCP is the "talk to Claude" surface.
     return _write("log", {"domain": domain, "outcome": outcome, "amount": amount,
-                          "unit": unit, "covered": covered, "task": task})
+                          "unit": unit, "covered": covered, "task": task,
+                          "via": "claude"})
+
+
+@mcp.tool()
+def morning_checkin(energy: str, pull: str = None, focus: list[str] = None,
+                    note: str = None) -> str:
+    """Record this morning's check-in and get back today's plan SIZED to it.
+
+    energy ∈ foggy|steady|sharp (foggy → 3 items at floor amounts, steady → 5,
+    sharp → everything at aspirational amounts). `pull` is where attention is
+    naturally drawn — an umbrella (e.g. "art") or a domain; it only groups
+    those items first, it never changes the engine's order. `focus` is up to 5
+    specific goals the owner named for today. Returns the sized day as text —
+    show it to the owner verbatim-ish; do not re-rank or add items.
+    """
+    res = _write("morning", {"energy": energy, "pull": pull,
+                             "focus": focus or [], "note": note, "via": "claude"})
+    return res.get("text", "recorded")
 
 
 @mcp.tool()

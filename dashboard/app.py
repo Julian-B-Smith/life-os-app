@@ -385,6 +385,33 @@ def overview(request: Request):
 
 # --- JSON API (header-token auth; preserves the old / and /today shapes) ---
 
+@app.get("/card", response_class=HTMLResponse, dependencies=[Depends(require_session)])
+def paper_card(request: Request):
+    """The printable index card (interface trial). Sized by today's morning
+    check-in if there is one — any surface's check-in counts — else steady.
+
+    Rendering marks "a card was printed today" OUTSIDE the data tree, so the
+    evening sweep knows to ask for a photo without churning git.
+    """
+    from interfaces import card as _card
+    from interfaces import morning as _morning
+    root, today = get_life_os_root(), date.today()
+    rec = _morning.read_today(root, today) or {}
+    energy = rec.get("energy") if rec.get("energy") in _morning.ENERGY else "steady"
+    pull, focus = rec.get("pull"), rec.get("focus") or []
+    shaped = _morning.shape_for(root, today, energy, pull, focus)
+    _card.mark_viewed(today)
+    return templates.TemplateResponse(request, "card.html", {
+        "day": today.isoformat(), "weekday": today.strftime("%a"),
+        "day_label": today.strftime("%-d %b"),
+        "energy_picked": rec.get("energy"), "energy_used": energy,
+        "focus": shaped["focus"],
+        "pull_label": shaped["pull"]["label"] if shaped["pull"] else None,
+        "pull_rows": shaped["pull"]["items"] if shaped["pull"] else [],
+        "rest_rows": shaped["rest"], "hidden": shaped["hidden"],
+    })
+
+
 @app.get("/api/", dependencies=[Depends(require_token)])
 def api_index() -> dict:
     root = get_life_os_root()

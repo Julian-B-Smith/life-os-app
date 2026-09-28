@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Card · {{ day }}</title>
+<style>
+  /* The printable index card (interface trial, 2026-09-28). Standalone on
+     purpose — no hub chrome — because this page's job is to become paper.
+     Palette + voices are the MINDLATHE constitution's paper/ink pair:
+     serif for the words you read, mono for the IDs the photo reader matches. */
+  :root {
+    --paper: oklch(96.5% 0.006 85); --ink: oklch(22% 0.01 60);
+    --ink-muted: oklch(45% 0.01 60); --rule: oklch(90% 0.008 85);
+    --serif: "EB Garamond", Georgia, "Times New Roman", serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+  @page { size: A6 portrait; margin: 8mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--serif); }
+  .card { max-width: 105mm; margin: 24px auto; padding: 6mm; background: var(--paper);
+          border: 1px solid var(--ink); }
+  .top { display: flex; justify-content: space-between; align-items: baseline;
+         border-bottom: 1px solid var(--ink); padding-bottom: 2mm; }
+  .date { font-size: 17pt; }
+  .lbl { font-family: var(--mono); font-size: 7pt; letter-spacing: .13em;
+         text-transform: uppercase; color: var(--ink-muted); }
+  .energy { margin: 3mm 0 1mm; font-size: 11pt; }
+  .energy span { margin-right: 5mm; }
+  .energy .picked { outline: 1px solid var(--ink); outline-offset: 2px; border-radius: 99px; padding: 0 2mm; }
+  .focus { margin: 2mm 0; font-style: italic; font-size: 11pt; }
+  .grp { margin-top: 3mm; }
+  .row { display: grid; grid-template-columns: 6mm 1fr auto; gap: 2mm; align-items: start;
+         padding: 1.6mm 0; border-bottom: 1px solid var(--rule); }
+  .box { width: 4.2mm; height: 4.2mm; border: 1.2px solid var(--ink); margin-top: .6mm; }
+  .title { font-size: 11.5pt; line-height: 1.25; }
+  .id { font-family: var(--mono); font-size: 7pt; letter-spacing: .06em; color: var(--ink-muted); }
+  .mins { font-family: var(--mono); font-size: 7pt; color: var(--ink-muted); white-space: nowrap;
+          margin-top: .8mm; }
+  .note { margin-top: 4mm; }
+  .line { border-bottom: 1px solid var(--rule); height: 6mm; }
+  .empty { font-style: italic; color: var(--ink-muted); padding: 3mm 0; }
+  .bar { max-width: 105mm; margin: 0 auto 24px; display: flex; justify-content: space-between;
+         font-family: var(--mono); font-size: 11px; }
+  .bar button { font-family: var(--mono); background: var(--paper); color: var(--ink);
+                border: 1px solid var(--ink); padding: 6px 12px; cursor: pointer; }
+  .bar a { color: var(--ink-muted); }
+  @media print { .bar { display: none; } .card { margin: 0; border: none; max-width: none; } }
+</style>
+</head>
+<body>
+<main class="card" aria-label="Printable daily card">
+  <div class="top">
+    <div class="date">{{ weekday }} {{ day_label }}</div>
+    <div class="lbl">LIFE-OS · CARD</div>
+  </div>
+
+  <div class="energy" aria-label="Energy — circle one">
+    {% for e in ["foggy", "steady", "sharp"] %}<span class="{{ 'picked' if e == energy_picked else '' }}">{{ e }}</span>{% endfor %}
+    <span class="lbl">← circle one</span>
+  </div>
+
+  {% if focus %}
+  <div class="focus">{% for f in focus %}{{ f }}{% if not loop.last %} · {% endif %}{% endfor %}</div>
+  {% endif %}
+
+  {% if pull_label and pull_rows %}
+  <div class="grp lbl">PULLED · {{ pull_label | upper }}</div>
+  {% for r in pull_rows %}
+  <div class="row"><div class="box"></div>
+    <div><div class="title">{{ r.title }}{% if r.amount %} — {{ r.amount }}{% endif %}</div><div class="id">{{ r.id }}</div></div>
+    <div class="mins">min ___</div></div>
+  {% endfor %}
+  {% endif %}
+
+  {% if rest_rows %}
+  <div class="grp lbl">{{ 'ALSO' if pull_rows else 'TODAY' }}</div>
+  {% for r in rest_rows %}
+  <div class="row"><div class="box"></div>
+    <div><div class="title">{{ r.title }}{% if r.amount %} — {{ r.amount }}{% endif %}</div><div class="id">{{ r.id }}</div></div>
+    <div class="mins">min ___</div></div>
+  {% endfor %}
+  {% endif %}
+
+  {% if not pull_rows and not rest_rows %}
+  <div class="empty">Nothing eligible in the plan today — an open day.</div>
+  {% endif %}
+
+  <div class="note">
+    <div class="lbl">NOTE</div>
+    <div class="line"></div><div class="line"></div>
+  </div>
+</main>
+<div class="bar">
+  <a href="{{ p }}/overview">← hub</a>
+  <span>sized: {{ energy_used }}{% if hidden %} · {{ hidden }} held back{% endif %}</span>
+  <button onclick="window.print()">print</button>
+</div>
+</body>
+</html>

@@ -55,6 +55,18 @@ from bot_handlers.review import (
     build_review_reply_capture,
     build_send_review_prompt,
 )
+from bot_handlers.trial import (  # interface trial, 2026-09-28
+    build_cmd_morning,
+    build_cmd_sweep,
+    build_focus_capture,
+    build_morning_callback,
+    build_paper_callback,
+    build_photo_handler,
+    build_send_morning_card,
+    build_send_sweep,
+    build_sweep_callback,
+    trial_fire_times,
+)
 import notifications
 
 load_dotenv(Path(__file__).parent / ".env", override=True)
@@ -228,6 +240,7 @@ async def cmd_evening(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "covered": summary,
         "outcome": "done",
         "notes": f"Raw brief: {brief}",
+        "via": "telegram",
     })
 
     await update.message.reply_text(f"✅ Logged:\n\n{summary}")
@@ -370,6 +383,7 @@ async def cmd_log(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     }
     if domain:
         entry["domain"] = domain
+    entry["via"] = "telegram"
     append_log_entry(entry)
     tag = f" [{domain}]" if domain else ""
     await update.message.reply_text(f"📓 Logged{tag}: {body}")
@@ -519,6 +533,7 @@ async def checkin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     }
     if task_id:
         entry["task"] = task_id
+    entry["via"] = "telegram"
     append_log_entry(entry)
 
     # Reshuffle the remainder of the day through the shared engine.
@@ -764,6 +779,7 @@ async def done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "covered": task.title,
             "outcome": "done",
             "task": task.id,
+            "via": "telegram",
         })
         message = f"✅ Marked done in inbox: {task.title}"
     else:
@@ -776,6 +792,7 @@ async def done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         }
         if task.domain:
             entry["domain"] = task.domain
+        entry["via"] = "telegram"
         append_log_entry(entry)
         message = f"✅ Logged done: {task.title} ({task.id})"
 
@@ -1540,6 +1557,16 @@ async def _arm_today() -> int:
         send_notify, send_checkin, _arm_today,
         send_review_fn=send_review_prompt,
     )
+    # Interface trial: morning card + evening sweep, times from the data tree's
+    # schedule/interfaces.yaml. Fixed ids + replace_existing make re-arms
+    # idempotent; a past time is simply not scheduled.
+    from interfaces.config import load as _load_trial_cfg
+    for kind, when in trial_fire_times(_load_trial_cfg(get_life_os_root()),
+                                       date.today(), datetime.now()):
+        fn = send_morning_card if kind == "morning" else send_sweep
+        _aps_scheduler.add_job(fn, "date", run_date=when, id=f"tr:{kind}",
+                               replace_existing=True)
+        armed += 1
     logger.info("T-5 jobs armed: %d", armed)
     return armed
 
@@ -1594,6 +1621,18 @@ send_review_prompt = build_send_review_prompt(
     lambda: os.getenv("TELEGRAM_BOT_TOKEN"), get_chat_id, get_life_os_root)
 cmd_review = build_cmd_review(is_authorized, get_life_os_root)
 review_reply_capture = build_review_reply_capture(is_authorized, get_life_os_root)
+
+# Interface trial surfaces (bot_handlers/trial.py).
+send_morning_card = build_send_morning_card(lambda: os.getenv("TELEGRAM_BOT_TOKEN"), get_chat_id)
+send_sweep = build_send_sweep(lambda: os.getenv("TELEGRAM_BOT_TOKEN"), get_chat_id, get_life_os_root)
+cmd_morning = build_cmd_morning(is_authorized)
+cmd_sweep = build_cmd_sweep(is_authorized, get_life_os_root)
+morning_callback = build_morning_callback(get_chat_id, get_life_os_root)
+focus_capture = build_focus_capture(is_authorized, get_life_os_root)
+sweep_callback = build_sweep_callback(get_chat_id, get_life_os_root, append_log_entry)
+photo_handler = build_photo_handler(is_authorized, get_life_os_root)
+paper_callback = build_paper_callback(get_chat_id, get_life_os_root, append_log_entry,
+                                      write_ingest_note)
 
 
 # ---------------------------------------------------------------------------
@@ -1657,6 +1696,17 @@ def run_bot() -> None:
     app.add_handler(CallbackQueryHandler(done_callback, pattern=r"^dn:"))
     app.add_handler(CallbackQueryHandler(move_conflict_callback, pattern=r"^mv:"))
     app.add_handler(CallbackQueryHandler(reshuffle_choice_callback, pattern=r"^(rm|ad):"))
+    # Interface trial (bot_handlers/trial.py).
+    app.add_handler(CommandHandler("morning", cmd_morning))
+    app.add_handler(CommandHandler("sweep", cmd_sweep))
+    app.add_handler(CallbackQueryHandler(morning_callback, pattern=r"^mc:"))
+    app.add_handler(CallbackQueryHandler(sweep_callback, pattern=r"^wt:"))
+    app.add_handler(CallbackQueryHandler(paper_callback, pattern=r"^pc:"))
+    # Non-reply text only acts while a morning check-in is waiting for typed
+    # goals; replies stay with the review capture registered above.
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & ~filters.REPLY, focus_capture))
+    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     logger.info("Bot starting (long-polling)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 

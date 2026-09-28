@@ -7,7 +7,9 @@ arbitrary-file-write path. Writes land in the tree and the 5-min sync timer
 commits + pushes them (git = the audit log).
 
 Hard scope (write-mcp.md): these primitives can only append to daily/logs,
-ingest/, daily/reviews, and inbox.md. They cannot touch the vault, thresholds,
+ingest/, daily/reviews, and inbox.md — plus, for the interface trial
+(2026-09-28), daily/morning/ (check-in stanzas) and daily/proposals/ (watcher
+findings awaiting a human tap). They cannot touch the vault, thresholds,
 schema, derived state, skills, or dev/ — there is simply no endpoint for it.
 
 If ``LIFE_OS_WRITE_TOKEN`` is unset the whole write API is disabled (503) — a
@@ -40,6 +42,9 @@ from pydantic import BaseModel
 from bot_handlers.review import append_review
 from dashboard.ratelimit import enforce_pre_auth, enforce_write, record_auth_failure
 from scheduler.domains import list_domains
+from interfaces import proposals as _proposals
+from interfaces.config import load as _load_cfg
+from interfaces.morning import VIAS, record_morning, render_day_text, shape_for
 from utils import append_inbox, append_log_entry, get_life_os_root, write_ingest_note
 
 router = APIRouter(prefix="/api/write", tags=["write"])
@@ -92,6 +97,20 @@ class LogBody(BaseModel):
     unit: Optional[str] = None
     covered: Optional[str] = None
     task: Optional[str] = None
+    via: Optional[str] = None      # which interface wrote this (trial measurement)
+
+
+class MorningBody(BaseModel):
+    energy: str                    # foggy | steady | sharp
+    pull: Optional[str] = None     # umbrella key/label, a domain, or none
+    focus: Optional[list[str]] = None
+    note: Optional[str] = None
+    via: str = "mcp"
+
+
+class ProposeBody(BaseModel):
+    findings: list[dict]
+    via: str = "watcher"
 
 
 class NoteBody(BaseModel):
@@ -125,6 +144,10 @@ def _do_log(b: "LogBody") -> dict:
     if b.amount is not None and b.unit:
         # Canonical `duration:` field carries the unit (DOMAIN-FORMAT §2).
         entry["duration"] = f"{b.amount:g} {b.unit}"
+    if b.via:
+        if b.via not in VIAS:
+            raise HTTPException(status_code=422, detail=f"via must be one of {VIAS}")
+        entry["via"] = b.via
     append_log_entry(entry)
     return {"ok": True, "written": "daily/logs", "entry": entry}
 
@@ -156,6 +179,50 @@ def _do_inbox(b: "InboxBody") -> dict:
     return {"ok": True, "written": "inbox.md", "line": text}
 
 
+def _card_url() -> Optional[str]:
+    """Absolute link to the printable card, if the public origin is configured.
+
+    The origin lives in the PRIVATE data tree (schedule/interfaces.yaml) and the
+    hidden prefix in env — neither is ever written into this public repo.
+    """
+    origin = _load_cfg(get_life_os_root()).get("public_origin")
+    if not origin:
+        return None
+    return f"{str(origin).rstrip('/')}{os.getenv('LIFE_OS_HUB_PREFIX', '').rstrip('/')}/card"
+
+
+def _do_morning(b: "MorningBody") -> dict:
+    """Record a check-in, then return the day sized by it — the payoff."""
+    focus = [f.strip()[:200] for f in (b.focus or []) if f and f.strip()][:5]
+    if b.note and len(b.note) > 1000:
+        raise HTTPException(status_code=422, detail="note too long (≤1000 chars)")
+    root = get_life_os_root()
+    try:
+        path = record_morning(root, b.energy, b.pull, focus, b.note, via=b.via)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    shaped = shape_for(root, date.today(), b.energy, b.pull, focus)
+    return {"ok": True, "written": str(path.relative_to(root)), "day": shaped,
+            "text": render_day_text(shaped, _card_url())}
+
+
+def _do_propose(b: "ProposeBody") -> dict:
+    """Watcher findings → the confirm queue. Nothing is logged here."""
+    if len(b.findings) > 50:
+        raise HTTPException(status_code=422, detail="at most 50 findings per report")
+    if b.via not in VIAS:
+        raise HTTPException(status_code=422, detail=f"via must be one of {VIAS}")
+    root = get_life_os_root()
+    domains = list_domains(root)
+    try:
+        clean = [_proposals.validate(f, domains) for f in b.findings]
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    items = _proposals.report(root, date.today(), clean, via=b.via)
+    return {"ok": True, "written": "daily/proposals",
+            "open": sum(1 for i in items if i.get("status") == "open")}
+
+
 # --- surface 1: Bearer token (programmatic clients) -------------------------
 
 @router.post("/log", dependencies=[Depends(require_write_token)])
@@ -176,6 +243,16 @@ def w_review(b: ReviewBody) -> dict:
 @router.post("/inbox", dependencies=[Depends(require_write_token)])
 def w_inbox(b: InboxBody) -> dict:
     return _do_inbox(b)
+
+
+@router.post("/morning", dependencies=[Depends(require_write_token)])
+def w_morning(b: MorningBody) -> dict:
+    return _do_morning(b)
+
+
+@router.post("/propose", dependencies=[Depends(require_write_token)])
+def w_propose(b: ProposeBody) -> dict:
+    return _do_propose(b)
 
 
 # --- surface 2: session cookie + CSRF (the browser hub) ---------------------
@@ -250,3 +327,8 @@ def sw_review(b: ReviewBody) -> dict:
 @session_router.post("/inbox", dependencies=[Depends(require_session_write)])
 def sw_inbox(b: InboxBody) -> dict:
     return _do_inbox(b)
+
+
+@session_router.post("/morning", dependencies=[Depends(require_session_write)])
+def sw_morning(b: MorningBody) -> dict:
+    return _do_morning(b)

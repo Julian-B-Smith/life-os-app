@@ -27,6 +27,8 @@ COMMAND_REGISTRY: list[tuple[str, str, str]] = [
     ("Daily flow", "done",      "Pick a one-shot task to mark done (Type 1/2/3); recurring uses /log"),
     ("Daily flow", "ai",        "<text> — freeform note; Haiku tags and saves it"),
     ("Daily flow", "review",    "<text> captures a messy review; bare /review (or /review weekly) prompts you now"),
+    ("Daily flow", "morning",   "3-tap check-in: energy, pull, focus — replies with today sized for it"),
+    ("Daily flow", "sweep",     "confirm what the watchers noticed today (+ paper card nudge)"),
 
     ("Reshuffle",  "behind",    "Running behind — pick a scheduled task to drop"),
     ("Reshuffle",  "add",       "<event> @<time> [date] — anchored event w/ reminder; /add queue pins a carried task"),
