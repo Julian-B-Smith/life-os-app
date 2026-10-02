@@ -106,7 +106,7 @@ sudo /bin/systemctl restart life-os-bot life-os-dashboard
 # 8. Flag any deploy/ file changes that genuinely need a manual install
 # run (Caddyfile needs sed-render + caddy reload; install-services.sh is
 # the installer script itself).
-if echo "$CHANGED" | grep -qE '^deploy/(Caddyfile|install-services\.sh)$'; then
+if echo "$CHANGED" | grep -qE '^deploy/(Caddyfile(\.hidden)?|install-services\.sh)$'; then
     echo "NOTE: deploy/Caddyfile or install-services.sh changed —" >&2
     echo "      Re-run: ssh life@<host> 'cd ~/app && bash deploy/install-services.sh'" >&2
 fi

@@ -43,12 +43,24 @@ __DOMAIN__ {
         reverse_proxy localhost:8000
     }
 
-    # Root + everything else: neutral holding page until the real site lands
-    # here. Reveals nothing about Life-OS. Replace this block when the public
-    # site is built (e.g. file_server or a proxy to the new app).
-    handle {
+    # Bare /health keeps the exact response it had before the public site
+    # landed (the old root placeholder), so nothing that pings it changes.
+    # The app's real health probe is <prefix>/health, above. mind-lathe's
+    # NEEDS.md reserves /health; its links gate keeps dist/ from claiming it.
+    handle /health {
         header Content-Type "text/html; charset=utf-8"
         respond "<!doctype html><meta charset=utf-8><title>mindlathe</title><body style='font:16px system-ui;display:grid;place-items:center;height:90vh;margin:0;color:#555'>Coming soon.</body>" 200
+    }
+
+    # Root + everything else: the PUBLIC site (mind-lathe repo), a static dist/
+    # published to /srv/mind-lathe by deploy/bin/deploy-site.sh. Today that is
+    # the Culture holding page (mind-lathe IR-2, D31); IR-1 later swaps the
+    # directory's CONTENTS for the ratified site — this block should not change.
+    # No try_files: a SPA fallback here would answer every unknown path with
+    # 200, shadowing reserved paths (mind-lathe NEEDS.md item 3). Unknown → 404.
+    handle {
+        root * /srv/mind-lathe
+        file_server
     }
 
     log {

@@ -40,3 +40,15 @@ date live in the data tree's `dev/plans/` docs and in git history.
    it cannot shadow `/api`, `/login`, or `/health`. The web root lives at
    `/srv/life-os-web`, not under the deploy user's home — a `0750` home is not
    traversable by the Caddy user, and loosening it would be the wrong fix.
+
+4. **The domain root serves mind-lathe's static `dist/` from `/srv/mind-lathe`**
+   (2026-10-02, mind-lathe IR-2). The root `respond` placeholder became a plain
+   `file_server` — no `try_files`, so unknown paths 404 instead of a SPA
+   fallback shadowing reserved paths. Content swaps (Culture holding page now,
+   the ratified site later via IR-1) are `deploy/bin/deploy-site.sh` only; the
+   Caddy block should not change again. Bare `/health` keeps its old placeholder
+   response verbatim in its own `handle`, because IR-2 asked that it be left
+   untouched and a file_server would otherwise turn it into a 404. *Why the
+   prefix grep lives here:* mind-lathe must never contain the hub prefix, even
+   inside a scanner, so only this side can check `dist/` for it; the script
+   refuses on an empty prefix, since `grep -F ""` matches everything.
