@@ -8,8 +8,9 @@
 #
 # Why not just re-run install-services.sh: it overwrites /etc/caddy/Caddyfile
 # blind, and the live file has been hand-edited before (DECISIONS 3 moved the
-# hub bundle to /srv while the template still names /home/life/web). A blind
-# overwrite would silently revert that. Read the diff; if it shows a live edit
+# hub bundle to /srv by hand-editing the live file; the template caught up only
+# on 2026-10-02, after this script's diff exposed it). A blind overwrite would
+# silently revert any such edit. Read the diff; if it shows a live edit
 # the template lacks, fix the TEMPLATE first, then apply.
 set -euo pipefail
 APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"

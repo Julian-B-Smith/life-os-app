@@ -32,7 +32,7 @@ __DOMAIN__ {
     # immediately 401s to the login page). Source maps are deliberately not
     # deployed — see deploy/bin/deploy-web.sh.
     handle_path __HUB_PREFIX__/app/* {
-        root * /home/life/web
+        root * /srv/life-os-web
         try_files {path} /index.html
         file_server
     }

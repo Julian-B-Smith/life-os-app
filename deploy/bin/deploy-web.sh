@@ -16,7 +16,8 @@
 set -euo pipefail
 
 DIST="${1:?usage: deploy-web.sh <path-to-dist>}"
-DEST="${LIFE_OS_WEB_DIR:-/home/life/web}"
+# /srv, not ~life: a 0750 home is not traversable by the Caddy user (DECISIONS 3).
+DEST="${LIFE_OS_WEB_DIR:-/srv/life-os-web}"
 
 [ -f "${DIST}/index.html" ] || { echo "!! ${DIST} has no index.html"; exit 1; }
 
