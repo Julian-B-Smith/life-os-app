@@ -58,13 +58,16 @@ __DOMAIN__ {
     # directory's CONTENTS for the ratified site — this block should not change.
     # No try_files: a SPA fallback here would answer every unknown path with
     # 200, shadowing reserved paths (mind-lathe NEEDS.md item 3). Unknown → 404.
-    # no-cache = revalidate on every load, not "don't cache": the browser keeps its
-    # copy and file_server's ETag / Last-Modified answer 304 when nothing changed,
-    # so a redeploy shows on a plain reload (owner, 2026-10-05) for the cost of one
-    # tiny conditional request. Scoped to the public site; the hub is untouched.
+    # HTML gets no-cache = revalidate on every load, not "don't cache": the browser
+    # keeps its copy and file_server's ETag / Last-Modified answer 304 when nothing
+    # changed, so a redeploy shows on a plain reload (owner, 2026-10-05; mind-lathe's
+    # proposed IR-3). Only HTML: fingerprinted build assets (the ratified site's
+    # /assets/*-<hash>.js) never change under a name and can keep normal caching.
+    # Scoped to the public site; the hub is untouched.
     handle {
         root * /srv/mind-lathe
-        header Cache-Control "no-cache"
+        @html path / *.html
+        header @html Cache-Control "no-cache"
         file_server
     }
 
