@@ -56,8 +56,11 @@ echo "prefix grep: clean ($(find "${DIST}" -type f | wc -l | tr -d ' ') files)"
 
 # Owned by the deploy user, world-readable, so rsync needs no sudo after this.
 ssh "${SSHO[@]}" "${HOST}" "sudo -n install -d -o \$(id -un) -g \$(id -gn) -m 755 '${DEST}'"
-# --chmod: rsync -a copies local permissions, and a build that writes its file
-# 0600 (Endless Trance's does) would land unreadable to the Caddy user: a 403
-# for every visitor. Published files are world-readable by definition.
-rsync -a --delete --exclude '*.map' --chmod=D755,F644 -e "ssh ${SSHO[*]}" "${DIST}/" "${HOST}:${DEST}/"
+rsync -a --delete --exclude '*.map' -e "ssh ${SSHO[*]}" "${DIST}/" "${HOST}:${DEST}/"
+# rsync -a copies local permissions, and a build that writes its file 0600
+# (Endless Trance's does) would land unreadable to the Caddy user: a 403 for
+# every visitor. Published files are world-readable by definition, so fix them
+# on the box. Not rsync's --chmod: macOS ships openrsync, which rejects it.
+# Runs over the shared connection, so it costs no extra SSH connection.
+ssh "${SSHO[@]}" "${HOST}" "chmod -R u=rwX,go=rX '${DEST}'"
 echo "deployed to ${HOST}:${DEST}"
