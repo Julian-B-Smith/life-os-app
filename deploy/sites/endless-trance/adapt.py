@@ -14,6 +14,8 @@ So:
     so it needs its own @font-face rules), and the five families ship inline as
     WOFF2 subsets (fonts/: Latin + the symbols the page uses; variable fonts
     trimmed to the weights it uses). All SIL OFL 1.1; licences alongside.
+  * Taps reach the generator inside the gesture, and touchend/click unlock its
+    audio, so sound starts on iPhone (step 3).
   * JSZip from cdnjs is removed, not inlined: export is already off in this
     build (EXPORT_ON=false hides the tab and panel, owner's choice for the site),
     and the visualizer's zip import is hidden in hosted mode, so nothing reaches
@@ -82,7 +84,34 @@ def main(src, out):
     sub("""sc.src='https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'; sc.onload=res; sc.onerror=()=>rej(new Error('Could not load the zip reader')); document.head.appendChild(sc);""",
         """rej(new Error('Zip import is not available on this page'));""", "visualizer zip loader")
 
-    # 3. Nothing may still name an outside host. Two exemptions, both never
+    # 3. Sound on iPhone (owner report, 2026-10-06). Every tap lands in the visualizer's
+    #    frame, which forwarded it to the generator by postMessage, a LATER task, so the
+    #    generator started and resumed its AudioContext outside the gesture; iOS only lets
+    #    audio start or resume during the gesture itself (and only on touchend/click, not
+    #    on a touch pointerdown), so it stayed locked. Two parts, both relying on the frame
+    #    being same-origin (srcdoc):
+    #    a) the frame hands input to the host synchronously, by dispatching the same
+    #       MessageEvent on the parent (cwMsg's ev.source check still holds), so the
+    #       host's start / pause / resume run inside the event;
+    #    b) on touchend and click the frame calls the host to resume a context that should
+    #       be playing (started, not paused) but is not running. A deliberate pause stays.
+    sub("function cwMsg(ev){", """// mindlathe.xyz (iOS audio, see the site adaptation): called by the visualizer frame
+// from inside a touchend/click, so a context created or resumed outside a gesture runs.
+window.etUnlockAudio=function(){if(timer&&!PAUSED&&A&&A.ctx&&A.ctx.state!=='running')A.ctx.resume().catch(()=>{})};
+function cwMsg(ev){""", "host unlock")
+    sub("""  const ptr = (type, ev, extra)=>{ const p = toUI(ev); parent.postMessage(Object.assign({et:'ptr', type, x:p.x, y:p.y}, extra||{}), '*'); };""",
+        """  // mindlathe.xyz (iOS audio): hand input to the host inside the event, not in a later task.
+  const toHost = d => { try { parent.dispatchEvent(new parent.MessageEvent('message', {data: d, source: window})); } catch (_) { parent.postMessage(d, '*'); } };
+  const ptr = (type, ev, extra)=>{ const p = toUI(ev); toHost(Object.assign({et:'ptr', type, x:p.x, y:p.y}, extra||{})); };""",
+        "frame ptr")
+    sub("""    parent.postMessage({et:'key', key:e.key, code:e.code, shift:e.shiftKey, ctrl:e.ctrlKey, meta:e.metaKey, alt:e.altKey}, '*');""",
+        """    toHost({et:'key', key:e.key, code:e.code, shift:e.shiftKey, ctrl:e.ctrlKey, meta:e.metaKey, alt:e.altKey});""",
+        "frame key")
+    sub("""  parent.postMessage({et:'ready', gl:glOk}, '*');""",
+        """  for (const t of ['touchend', 'click']) addEventListener(t, () => { try { parent.etUnlockAudio && parent.etUnlockAudio(); } catch (_) {} }, {capture: true, passive: true});
+  parent.postMessage({et:'ready', gl:glOk}, '*');""", "frame unlock")
+
+    # 4. Nothing may still name an outside host. Two exemptions, both never
     #    fetched: XML namespace URIs (identifiers), and the font licence comment
     #    inserted above (its project and licence URLs are text the OFL requires).
     hosts = set(re.findall(r"https?://([a-zA-Z0-9.-]+)", s.replace(lic, ""))) - {"www.w3.org"}
