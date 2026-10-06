@@ -34,8 +34,6 @@ contain no LLM calls. Skills / bot / API record and propose; the engine decides.
   the merge: a Caddy change applies only when the owner runs
   `ssh vps 'bash ~/app/deploy/bin/caddy-apply.sh'` (read the dry-run diff,
   then `--apply`), and site content goes out only via `deploy/bin/deploy-*.sh`.
-  The git remote still names the repo's old owner, so `gh pr create` needs
-  `--repo Julian-B-Smith/life-os-app --head <branch>`.
 - **Hidden hub path.** The dashboard is mounted at **`/lathe`** on the VPS
   (`LIFE_OS_HUB_PREFIX`). Deploy/health checks use
   `https://mindlathe.xyz/lathe/health` — bare `/health` is now a placeholder.
