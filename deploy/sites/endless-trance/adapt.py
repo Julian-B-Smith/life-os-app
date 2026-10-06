@@ -15,7 +15,8 @@ So:
     WOFF2 subsets (fonts/: Latin + the symbols the page uses; variable fonts
     trimmed to the weights it uses). All SIL OFL 1.1; licences alongside.
   * Taps reach the generator inside the gesture, and touchend/click unlock its
-    audio, so sound starts on iPhone (step 3).
+    audio, so sound starts on iPhone (step 3). On phones, larger audio buffers
+    and closing the audio on reload (step 3c).
   * JSZip from cdnjs is removed, not inlined: export is already off in this
     build (EXPORT_ON=false hides the tab and panel, owner's choice for the site),
     and the visualizer's zip import is hidden in hosted mode, so nothing reaches
@@ -110,6 +111,23 @@ function cwMsg(ev){""", "host unlock")
     sub("""  parent.postMessage({et:'ready', gl:glOk}, '*');""",
         """  for (const t of ['touchend', 'click']) addEventListener(t, () => { try { parent.etUnlockAudio && parent.etUnlockAudio(); } catch (_) {} }, {capture: true, passive: true});
   parent.postMessage({et:'ready', gl:glOk}, '*');""", "frame unlock")
+
+    # 3c. Phones: fewer audio dropouts, and a clean audio start after a reload (owner,
+    #     2026-10-06, after audio lagged, cut out, and stayed broken across reloads on an
+    #     iPhone). Both phones-only, (pointer: coarse); desktop is untouched.
+    #     - latencyHint 'playback' asks for larger audio buffers, so a busy phone has slack
+    #       before the audio thread misses a deadline. The generator schedules ahead and
+    #       reports outputLatency to the visualizer (avClock), so music and visuals stay in
+    #       step; controls answer ~0.1-0.2 s later.
+    #     - On pagehide (reload, navigation), close the context so the next load does not
+    #       compete with the old page's audio. Not when persisted: a page kept in the
+    #       back/forward cache comes back with its graph and must still have a context.
+    sub("A=setupAudio(new (window.AudioContext||window.webkitAudioContext)());",
+        "A=setupAudio(new (window.AudioContext||window.webkitAudioContext)(ET_PHONE?{latencyHint:'playback'}:{}));",
+        "start latency")
+    sub("window.etUnlockAudio=function(){", """const ET_PHONE=typeof matchMedia!=='undefined'&&matchMedia('(pointer:coarse)').matches;
+if(ET_PHONE)addEventListener('pagehide',e=>{if(!e.persisted&&A&&A.ctx&&A.ctx.state!=='closed')try{A.ctx.close()}catch(_){}});
+window.etUnlockAudio=function(){""", "phone pagehide")
 
     # 4. Nothing may still name an outside host. Two exemptions, both never
     #    fetched: XML namespace URIs (identifiers), and the font licence comment
