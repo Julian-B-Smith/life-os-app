@@ -48,8 +48,11 @@ __DOMAIN__ {
     # mind-lathe's /srv/mind-lathe so neither deploy can clobber the other; this
     # path is now Caddy's, like /health and the hub prefix, so mind-lathe's dist/
     # must not claim it. The bare path redirects so the page's base is the folder.
+    # `*` is load-bearing: redir reads a first argument that starts with `/` as a
+    # path MATCHER, so `redir /endless-trance/ 308` matched nothing here and the
+    # bare path answered an empty 200 (2026-10-05).
     handle /endless-trance {
-        redir /endless-trance/ 308
+        redir * /endless-trance/ 308
     }
     handle_path /endless-trance/* {
         root * /srv/endless-trance
