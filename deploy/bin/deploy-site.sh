@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# deploy-site.sh — publish the mind-lathe public site's dist/ to the domain root.
+# deploy-site.sh — publish a static dist/ to the box (by default mind-lathe's, at
+# the domain root; LIFE_OS_SITE_DIR picks another directory, e.g. Endless Trance's).
 #
 # Runs on the WORKSTATION (unlike deploy-web.sh, which runs on the box): the
 # site is built in the mind-lathe repo, gated here, then rsynced up. Caddy
@@ -55,5 +56,8 @@ echo "prefix grep: clean ($(find "${DIST}" -type f | wc -l | tr -d ' ') files)"
 
 # Owned by the deploy user, world-readable, so rsync needs no sudo after this.
 ssh "${SSHO[@]}" "${HOST}" "sudo -n install -d -o \$(id -un) -g \$(id -gn) -m 755 '${DEST}'"
-rsync -a --delete --exclude '*.map' -e "ssh ${SSHO[*]}" "${DIST}/" "${HOST}:${DEST}/"
+# --chmod: rsync -a copies local permissions, and a build that writes its file
+# 0600 (Endless Trance's does) would land unreadable to the Caddy user: a 403
+# for every visitor. Published files are world-readable by definition.
+rsync -a --delete --exclude '*.map' --chmod=D755,F644 -e "ssh ${SSHO[*]}" "${DIST}/" "${HOST}:${DEST}/"
 echo "deployed to ${HOST}:${DEST}"

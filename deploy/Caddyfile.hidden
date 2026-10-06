@@ -43,6 +43,21 @@ __DOMAIN__ {
         reverse_proxy localhost:8000
     }
 
+    # Endless Trance (owner's generator + visualizer): one static page in its own
+    # directory, published by deploy/bin/deploy-endless-trance.sh. Kept apart from
+    # mind-lathe's /srv/mind-lathe so neither deploy can clobber the other; this
+    # path is now Caddy's, like /health and the hub prefix, so mind-lathe's dist/
+    # must not claim it. The bare path redirects so the page's base is the folder.
+    handle /endless-trance {
+        redir /endless-trance/ 308
+    }
+    handle_path /endless-trance/* {
+        root * /srv/endless-trance
+        @html path / *.html
+        header @html Cache-Control "no-cache"
+        file_server
+    }
+
     # Bare /health keeps the exact response it had before the public site
     # landed (the old root placeholder), so nothing that pings it changes.
     # The app's real health probe is <prefix>/health, above. mind-lathe's
