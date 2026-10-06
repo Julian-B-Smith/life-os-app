@@ -27,6 +27,15 @@ contain no LLM calls. Skills / bot / API record and propose; the engine decides.
 - **It's live.** Push to `master` → the VPS auto-deploys in ~1 min, **after a
   pytest gate** (it won't restart on a red suite). Run `venv/bin/python -m pytest -q`
   before pushing.
+- **`deploy/` changes go through a PR, never straight to master** (owner,
+  2026-10-06). That covers Caddy config, deploy scripts and `deploy/sites/`
+  adaptations: they decide what is public on mindlathe.xyz. Branch → PR → the
+  owner merges (which auto-deploys as above). Two steps stay manual even after
+  the merge: a Caddy change applies only when the owner runs
+  `ssh vps 'bash ~/app/deploy/bin/caddy-apply.sh'` (read the dry-run diff,
+  then `--apply`), and site content goes out only via `deploy/bin/deploy-*.sh`.
+  The git remote still names the repo's old owner, so `gh pr create` needs
+  `--repo Julian-B-Smith/life-os-app --head <branch>`.
 - **Hidden hub path.** The dashboard is mounted at **`/lathe`** on the VPS
   (`LIFE_OS_HUB_PREFIX`). Deploy/health checks use
   `https://mindlathe.xyz/lathe/health` — bare `/health` is now a placeholder.
