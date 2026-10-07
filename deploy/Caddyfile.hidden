@@ -61,6 +61,20 @@ __DOMAIN__ {
         file_server
     }
 
+    # Endless Chiptunes (owner's generator + Endless Quest visualizer): same shape as
+    # Endless Trance above, its own directory, published by
+    # deploy/bin/deploy-endless-chiptunes.sh. This path is Caddy's too, so
+    # mind-lathe's dist/ must not claim it. `*` is load-bearing in the redir (see above).
+    handle /endless-chiptunes {
+        redir * /endless-chiptunes/ 308
+    }
+    handle_path /endless-chiptunes/* {
+        root * /srv/endless-chiptunes
+        @html path / *.html
+        header @html Cache-Control "no-cache"
+        file_server
+    }
+
     # Bare /health keeps the exact response it had before the public site
     # landed (the old root placeholder), so nothing that pings it changes.
     # The app's real health probe is <prefix>/health, above. mind-lathe's
