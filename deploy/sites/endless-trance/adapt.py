@@ -17,6 +17,7 @@ So:
   * (The iPhone audio fixes this script used to patch in, input inside the
     gesture, unlock on touchend/click, phone latency, close on pagehide, are
     upstream since Endless Trance v22: integrations/mindlathe-site reply 002.)
+  * No "Full panel" button in the control window (owner, 2026-10-07).
   * JSZip from cdnjs is removed, not inlined: export is already off in this
     build (EXPORT_ON=false hides the tab and panel, owner's choice for the site),
     and the visualizer's zip import is hidden in hosted mode, so nothing reaches
@@ -84,6 +85,14 @@ def main(src, out):
         "visualizer head")
     sub("""sc.src='https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'; sc.onload=res; sc.onerror=()=>rej(new Error('Could not load the zip reader')); document.head.appendChild(sc);""",
         """rej(new Error('Zip import is not available on this page'));""", "visualizer zip loader")
+
+    # 2b. No "Full panel" button in the control window (owner, 2026-10-07): on the site the
+    #     TV and its menu are the whole interface. Only the button goes; cwPanel() itself
+    #     stays, because the generator still calls it when the browser has no WebGL (then
+    #     the page's panel is the only usable interface).
+    sub("""  cwButton('panel',x+612+r2x,ty+1+r2,104,26,document.body.classList.contains('tv')?'Full panel':'Hide panel',()=>cwPanel());
+""", """  // mindlathe.xyz: no Full panel button on the site (the TV is the interface); cwPanel() stays for the no-WebGL fallback.
+""", "full panel button")
 
     # 3. Nothing may still name an outside host. Two exemptions, both never
     #    fetched: XML namespace URIs (identifiers), and the font licence comment
