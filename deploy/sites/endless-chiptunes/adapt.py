@@ -11,7 +11,9 @@ Google Fonts links are removed from both documents (the generator page and the
 visualizer's, embedded as text and opened in a srcdoc iframe, so it needs its own
 @font-face rules) and the families ship inline as WOFF2 subsets (fonts/: Latin +
 the symbols the page uses; Pixelify Sans trimmed to weights 400-600). All SIL
-OFL 1.1, licences alongside.
+OFL 1.1, licences alongside. It also adds the page's viewport meta (the artifact
+has none, since claude.ai runs it inside an iframe), so phones lay it out at
+device width and get the portrait layout.
 
 Every edit must match exactly once, so a changed upstream fails loudly instead
 of half-applying; the last check refuses any output that still names an outside
@@ -59,8 +61,13 @@ def main(src, out):
     common = face("Press Start 2P", "PressStart2P.woff2") + face("Pixelify Sans", "PixelifySans.woff2", "400 600")
 
     # 1. The generator page.
+    # The viewport meta is the site's, not the artifact's (2026-10-08): on claude.ai the page
+    # runs inside an iframe, where the tag means nothing, so the build has none. Served as
+    # a page of its own, a phone without it lays the page out 980 px wide; the portrait
+    # rule (max-width:700px) then never matches, the screen stays 4:3, and Endless Quest
+    # picks the WIDE layout with the tube on instead of TALL with it off.
     sub(pre + '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Pixelify+Sans:wght@400;600&display=swap">\n',
-        lic + "<style>" + common + "</style>\n", "generator head")
+        '<meta name="viewport" content="width=device-width,initial-scale=1">\n' + lic + "<style>" + common + "</style>\n", "generator head")
     # 2. The visualizer's document (inert text until opened in the iframe).
     sub(pre + '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Pixelify+Sans:wght@400;600&family=VT323&display=swap">\n',
         "<style>" + common + face("VT323", "VT323.woff2") + "</style>\n", "visualizer head")
